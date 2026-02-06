@@ -31,7 +31,7 @@ GROQ_API_KEY=os.getenv("GROQ_API_KEY")
 
 LOGIN_URL = "https://samwad.iotcom.io/api/applogin"
 CALLDATA_URL = "https://samwad.iotcom.io/callData"
-BASE_AUDIO_URL = "https://samwad.iotcom.io/recording/recording/"
+BASE_AUDIO_URL = "https://samwad.iotcom.io/recording/recording"
 
 USERNAME = "srkh"
 PASSWORD = "RahulSR@789"
@@ -578,4 +578,5 @@ def main(process_date=None):
     print(f"{'='*60}\n")
 
 if __name__ == "__main__":
+
     main()
