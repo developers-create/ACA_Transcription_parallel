@@ -1,0 +1,12 @@
+schedule==1.2.0
+requests
+python-dotenv
+pydantic
+langchain-google-genai
+google-api-core
+pandas
+fuzzywuzzy
+python-Levenshtein
+sqlalchemy
+pymssql
+flask
