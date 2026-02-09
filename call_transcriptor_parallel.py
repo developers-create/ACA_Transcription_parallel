@@ -157,7 +157,7 @@ def process_single_audio_file(file_path, api_key, file_index):
     for attempt in range(4): 
         try:
             llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-flash-lite", # EDITED: Switched to Lite model to use available free quota
                 api_key=api_key,
                 temperature=0
             )
@@ -194,7 +194,6 @@ def process_single_audio_file(file_path, api_key, file_index):
             return response_dict
             
         except Exception as e:
-            # EDITED: Specific check for Rate Limit (429) to trigger a retry wait
             if "429" in str(e) or "ResourceExhausted" in str(e):
                 wait_time = (2 ** attempt) + random.random() 
                 print(f"⚠️ Rate limit hit for {call_id}. Retrying in {wait_time:.1f}s...")
@@ -214,7 +213,7 @@ def process_audio_files_parallel():
     
     print(f"\n{'='*60}")
     print(f"Starting parallel processing of {total_files} audio files")
-    print(f"Using 20 API keys with rate-limited submission") 
+    print(f"Using 20 API keys with rate-limited submission (Model: Flash Lite)") # EDITED: Updated print
     print(f"{'='*60}\n")
     
     data = []
@@ -230,7 +229,7 @@ def process_audio_files_parallel():
             futures.append(future)
             
             if idx < total_files - 1:
-                time.sleep(5) 
+                time.sleep(7.5) # EDITED: Slightly increased delay to 7.5s (8 RPM) to be safer on Free Tier
         
         for future in as_completed(futures):
             result = future.result()
@@ -242,6 +241,7 @@ def process_audio_files_parallel():
     print(f"{'='*60}\n")
     
     return data
+    
 def save_output_json(data):
     os.makedirs("./processed_reports", exist_ok=True)
     with open(f"./processed_reports/output.json","w") as f:
@@ -590,4 +590,5 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
