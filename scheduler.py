@@ -31,7 +31,7 @@ def job():
         logging.error(f"Error running transcription job: {str(e)}", exc_info=True)
 
 def run_scheduler():
-    schedule.every().day.at("16:15").do(job)
+    schedule.every().day.at("10:45").do(job)
     
     logging.info("Scheduler started. Job will run daily at 02:00 AM")
     logging.info("Press Ctrl+C to stop the scheduler")
