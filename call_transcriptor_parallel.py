@@ -154,47 +154,55 @@ class Convo(BaseModel):
 def process_single_audio_file(file_path, api_key, file_index):
     global processed_count, total_files
     
-    try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            api_key=api_key,
-            temperature=0
-        )
-        structured_llm = llm.with_structured_output(Convo)
-        
-        prompt="Extract the text from this audio file and convert it into agent customer conversation , along with start time stamp and end time stamp , the output should be strictly in hinglish not hindi,carefully analyse the call and separate the speakers sometimes agent may spea first sometimes customer may speak first so be carefull,The hospital name maybe SRK or SR Kalla Hospital detect this initially if something matches like this ('eg:- Namaskar SR Kalla Hospital se baat kar rhi hoon'), and intially they are strictly talking about this hospital not any hostel or other thing , carefully analyse this thing too, but dont add from yorself only if the tone matches then only add, some may start with this opening somemay not , but transcript every call given to you "
-        
-        with open(file_path, "rb") as f:
-            audio_data = base64.b64encode(f.read()).decode("utf-8")
-            
-        mime_type = "audio/wav" if file_path.endswith('.wav') else "audio/mp3"
-        
-        response = structured_llm.invoke([
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "media", 
-                        "mime_type": mime_type, 
-                        "data": audio_data
-                    }
-                ]
+    for attempt in range(4): 
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                api_key=api_key,
+                temperature=0
             )
-        ])
-        
-        response_dict = response.model_dump()
-        call_id = os.path.basename(file_path).split('.')[0]
-        response_dict['call_id'] = call_id
-        
-        with progress_lock:
-            processed_count += 1
-            print(f"✓ Processed [{processed_count}/{total_files}]: {call_id}")
-        
-        return response_dict
-        
-    except Exception as e:
-        print(f"✗ Error processing {os.path.basename(file_path)}: {str(e)}")
-        return None
+            structured_llm = llm.with_structured_output(Convo)
+            
+            prompt="Extract the text from this audio file and convert it into agent customer conversation , along with start time stamp and end time stamp , the output should be strictly in hinglish not hindi,carefully analyse the call and separate the speakers sometimes agent may spea first sometimes customer may speak first so be carefull,The hospital name maybe SRK or SR Kalla Hospital detect this initially if something matches like this ('eg:- Namaskar SR Kalla Hospital se baat kar rhi hoon'), and intially they are strictly talking about this hospital not any hostel or other thing , carefully analyse this thing too, but dont add from yorself only if the tone matches then only add, some may start with this opening somemay not , but transcript every call given to you "
+            
+            with open(file_path, "rb") as f:
+                audio_data = base64.b64encode(f.read()).decode("utf-8")
+                
+            mime_type = "audio/wav" if file_path.endswith('.wav') else "audio/mp3"
+            
+            response = structured_llm.invoke([
+                HumanMessage(
+                    content=[
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "media", 
+                            "mime_type": mime_type, 
+                            "data": audio_data
+                        }
+                    ]
+                )
+            ])
+            
+            response_dict = response.model_dump()
+            call_id = os.path.basename(file_path).split('.')[0]
+            response_dict['call_id'] = call_id
+            
+            with progress_lock:
+                processed_count += 1
+                print(f"👍 Processed [{processed_count}/{total_files}]: {call_id}")
+            
+            return response_dict
+            
+        except Exception as e:
+            # EDITED: Specific check for Rate Limit (429) to trigger a retry wait
+            if "429" in str(e) or "ResourceExhausted" in str(e):
+                wait_time = (2 ** attempt) + random.random() 
+                print(f"⚠️ Rate limit hit for {call_id}. Retrying in {wait_time:.1f}s...")
+                time.sleep(wait_time)
+                continue 
+                
+            print(f"X Error processing {os.path.basename(file_path)}: {str(e)}")
+            return None
 
 def process_audio_files_parallel():
     global processed_count, total_files
@@ -206,12 +214,12 @@ def process_audio_files_parallel():
     
     print(f"\n{'='*60}")
     print(f"Starting parallel processing of {total_files} audio files")
-    print(f"Using 20 API keys with 20 concurrent workers")
+    print(f"Using 20 API keys with rate-limited submission") 
     print(f"{'='*60}\n")
     
     data = []
     
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    with ThreadPoolExecutor(max_workers=15) as executor: 
         futures = []
         
         for idx, file in enumerate(files):
@@ -220,6 +228,9 @@ def process_audio_files_parallel():
             
             future = executor.submit(process_single_audio_file, file_path, api_key, idx)
             futures.append(future)
+            
+            if idx < total_files - 1:
+                time.sleep(5) 
         
         for future in as_completed(futures):
             result = future.result()
@@ -231,7 +242,6 @@ def process_audio_files_parallel():
     print(f"{'='*60}\n")
     
     return data
-
 def save_output_json(data):
     os.makedirs("./processed_reports", exist_ok=True)
     with open(f"./processed_reports/output.json","w") as f:
@@ -580,3 +590,4 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
