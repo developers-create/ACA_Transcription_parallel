@@ -217,7 +217,7 @@ def process_audio_files_parallel():
         file_path = f"./input_file/{file}"
         key_index = (idx // 19) % len(GOOGLE_API_KEYS)
         api_key = GOOGLE_API_KEYS[key_index]
-        print(f"using key :{api_key[-5}\n")
+        print(f"using key :{api_key[-5]}\n")
         result = process_single_audio_file(file_path, api_key, idx)
         
         if result:
@@ -574,6 +574,7 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
 
