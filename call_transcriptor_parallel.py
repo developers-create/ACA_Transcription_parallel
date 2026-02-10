@@ -157,7 +157,7 @@ def process_single_audio_file(file_path, api_key, file_index):
     for attempt in range(4): 
         try:
             llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash-lite", # EDITED: Switched to Lite model to use available free quota
+                model="gemini-2.5-flash", 
                 api_key=api_key,
                 temperature=0
             )
@@ -205,43 +205,27 @@ def process_single_audio_file(file_path, api_key, file_index):
 
 def process_audio_files_parallel():
     global processed_count, total_files
-    
     processed_count = 0
     
     files = [f for f in os.listdir('./input_file') if f.endswith('.wav') or f.endswith('.mp3')]
     total_files = len(files)
-    
-    print(f"\n{'='*60}")
-    print(f"Starting parallel processing of {total_files} audio files")
-    print(f"Using 20 API keys with rate-limited submission (Model: Flash Lite)") # EDITED: Updated print
-    print(f"{'='*60}\n")
-    
     data = []
-    
-    with ThreadPoolExecutor(max_workers=15) as executor: 
-        futures = []
+
+    print(f"Starting Sequential Processing (Safety First Mode)...")
+
+    for idx, file in enumerate(files):
+        file_path = f"./input_file/{file}"
+        key_index = (idx // 19) % len(GOOGLE_API_KEYS)
+        api_key = GOOGLE_API_KEYS[key_index]
+        print(f"using key :{api_key[-5}\n")
+        result = process_single_audio_file(file_path, api_key, idx)
         
-        for idx, file in enumerate(files):
-            file_path = f"./input_file/{file}"
-            api_key = GOOGLE_API_KEYS[idx % 20]
-            
-            future = executor.submit(process_single_audio_file, file_path, api_key, idx)
-            futures.append(future)
-            
-            if idx < total_files - 1:
-                time.sleep(7.5) # EDITED: Slightly increased delay to 7.5s (8 RPM) to be safer on Free Tier
+        if result:
+            data.append(result)
         
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                data.append(result)
-    
-    print(f"\n{'='*60}")
-    print(f"Processing complete: {len(data)}/{total_files} files successfully processed")
-    print(f"{'='*60}\n")
-    
-    return data
-    
+        time.sleep(1) 
+
+    return data    
 def save_output_json(data):
     os.makedirs("./processed_reports", exist_ok=True)
     with open(f"./processed_reports/output.json","w") as f:
@@ -590,5 +574,6 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
