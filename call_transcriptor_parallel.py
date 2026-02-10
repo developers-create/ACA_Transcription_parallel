@@ -155,54 +155,50 @@ class Convo(BaseModel):
 def process_single_audio_file(file_path, api_key, file_index):
     global processed_count, total_files
     
-    for attempt in range(4): 
-        try:
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash-lite", 
-                api_key=api_key,
-                temperature=0
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash", 
+            api_key=api_key,
+            temperature=0
+        )
+        structured_llm = llm.with_structured_output(Convo)
+        
+        prompt="Extract the text from this audio file and convert it into agent customer conversation , along with start time stamp and end time stamp , the output should be strictly in hinglish not hindi,carefully analyse the call and separate the speakers sometimes agent may spea first sometimes customer may speak first so be carefull,The hospital name maybe SRK or SR Kalla Hospital detect this initially if something matches like this ('eg:- Namaskar SR Kalla Hospital se baat kar rhi hoon'), and intially they are strictly talking about this hospital not any hostel or other thing , carefully analyse this thing too, but dont add from yorself only if the tone matches then only add, some may start with this opening somemay not , but transcript every call given to you "
+        
+        with open(file_path, "rb") as f:
+            audio_data = base64.b64encode(f.read()).decode("utf-8")
+            
+        mime_type = "audio/wav" if file_path.endswith('.wav') else "audio/mp3"
+        
+        response = structured_llm.invoke([
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "media", 
+                        "mime_type": mime_type, 
+                        "data": audio_data
+                    }
+                ]
             )
-            structured_llm = llm.with_structured_output(Convo)
+        ])
+        
+        response_dict = response.model_dump()
+        call_id = os.path.basename(file_path).split('.')[0]
+        response_dict['call_id'] = call_id
+        
+        with progress_lock:
+            processed_count += 1
+            print(f"👍 Processed [{processed_count}/{total_files}]: {call_id}")
+        
+        return response_dict
+        
+    except Exception as e:
+        if "429" in str(e) or "ResourceExhausted" in str(e):
+            return "KEY_EXHAUSTED"
             
-            prompt="Extract the text from this audio file and convert it into agent customer conversation , along with start time stamp and end time stamp , the output should be strictly in hinglish not hindi,carefully analyse the call and separate the speakers sometimes agent may spea first sometimes customer may speak first so be carefull,The hospital name maybe SRK or SR Kalla Hospital detect this initially if something matches like this ('eg:- Namaskar SR Kalla Hospital se baat kar rhi hoon'), and intially they are strictly talking about this hospital not any hostel or other thing , carefully analyse this thing too, but dont add from yorself only if the tone matches then only add, some may start with this opening somemay not , but transcript every call given to you "
-            
-            with open(file_path, "rb") as f:
-                audio_data = base64.b64encode(f.read()).decode("utf-8")
-                
-            mime_type = "audio/wav" if file_path.endswith('.wav') else "audio/mp3"
-            
-            response = structured_llm.invoke([
-                HumanMessage(
-                    content=[
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "media", 
-                            "mime_type": mime_type, 
-                            "data": audio_data
-                        }
-                    ]
-                )
-            ])
-            
-            response_dict = response.model_dump()
-            call_id = os.path.basename(file_path).split('.')[0]
-            response_dict['call_id'] = call_id
-            
-            with progress_lock:
-                processed_count += 1
-                print(f"👍 Processed [{processed_count}/{total_files}]: {call_id}")
-            
-            return response_dict
-            
-        except Exception as e:
-            if "429" in str(e) or "ResourceExhausted" in str(e):
-                wait_time = (2 ** attempt) + random.random() 
-                print(f"⚠️ Rate limit hit for {call_id}. Retrying in {wait_time:.1f}s...")
-                time.sleep(wait_time)
-                continue 
-                
-            print(f"X Error processing {os.path.basename(file_path)}: {str(e)}")
-            return None
+        print(f"X Error processing {os.path.basename(file_path)}: {str(e)}")
+        return None
 
 def process_audio_files_parallel():
     global processed_count, total_files
@@ -212,21 +208,31 @@ def process_audio_files_parallel():
     total_files = len(files)
     data = []
 
-    print(f"Starting Sequential Processing (Safety First Mode)...")
+    print(f"Starting Sequential Processing with Dynamic Key Switching...")
 
+    current_key_idx = 0 # EDITED: Track the active key index across all files
     for idx, file in enumerate(files):
         file_path = f"./input_file/{file}"
-        key_index = (idx // 19) % len(GOOGLE_API_KEYS)
-        api_key = GOOGLE_API_KEYS[key_index]
-        print(f"using key :{api_key[-5:]}\n")
-        result = process_single_audio_file(file_path, api_key, idx)
         
-        if result:
-            data.append(result)
-        print("Sleeping!!!!\n")
-        time.sleep(4) 
+        while True: # EDITED: Retry loop for the specific file if a key is exhausted
+            api_key = GOOGLE_API_KEYS[current_key_idx]
+            result = process_single_audio_file(file_path, api_key, idx)
+            
+            if result == "KEY_EXHAUSTED":
+                current_key_idx = (current_key_idx + 1) % len(GOOGLE_API_KEYS)
+                print(f"🔄 Key Exhausted. Switching to next key: ...{api_key[-5:]}")
+                time.sleep(2) # Short buffer before retrying
+                continue
+            
+            if result:
+                data.append(result)
+            
+            print("Sleeping!!!!!!\n")
+            time.sleep(4) 
+            break 
 
-    return data    
+    return data
+
 def save_output_json(data):
     os.makedirs("./processed_reports", exist_ok=True)
     with open(f"./processed_reports/output.json","w") as f:
@@ -575,6 +581,7 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
 
