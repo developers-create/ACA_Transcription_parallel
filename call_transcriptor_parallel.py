@@ -20,6 +20,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+import random
 
 
 load_dotenv()
@@ -157,7 +158,7 @@ def process_single_audio_file(file_path, api_key, file_index):
     for attempt in range(4): 
         try:
             llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash", 
+                model="gemini-2.5-flash-lite", 
                 api_key=api_key,
                 temperature=0
             )
@@ -217,13 +218,13 @@ def process_audio_files_parallel():
         file_path = f"./input_file/{file}"
         key_index = (idx // 19) % len(GOOGLE_API_KEYS)
         api_key = GOOGLE_API_KEYS[key_index]
-        print(f"using key :{api_key[-5]}\n")
+        print(f"using key :{api_key[-5:]}\n")
         result = process_single_audio_file(file_path, api_key, idx)
         
         if result:
             data.append(result)
-        
-        time.sleep(1) 
+        printf("Sleeping!!!!\n")
+        time.sleep(4) 
 
     return data    
 def save_output_json(data):
@@ -574,6 +575,7 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
 
