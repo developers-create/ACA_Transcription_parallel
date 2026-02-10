@@ -223,7 +223,7 @@ def process_audio_files_parallel():
         
         if result:
             data.append(result)
-        printf("Sleeping!!!!\n")
+        print("Sleeping!!!!\n")
         time.sleep(4) 
 
     return data    
@@ -575,6 +575,7 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
 
