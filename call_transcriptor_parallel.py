@@ -157,7 +157,7 @@ def process_single_audio_file(file_path, api_key, file_index):
     
     try:
         llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash", 
+            model="gemini-2.5-flash-lite", 
             api_key=api_key,
             temperature=0
         )
@@ -581,6 +581,7 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
 
