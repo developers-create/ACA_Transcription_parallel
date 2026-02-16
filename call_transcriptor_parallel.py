@@ -69,7 +69,9 @@ def fetch_call_data(token,start_date,end_date):
     return []
 
 def filter_calls_with_bridge_id(call_list):
-    return [item for item in call_list if 'bridgeID' in item]
+    call_with_call_id=[item for item in call_list if 'bridgeID' in item ]
+    call_with_call_id=[item for item in call_with_call_id if 'Disposition' not in item or item['Disposition'].lower()=="connected" ]
+    return call_with_call_id
 
 def download_audio_files(call_list, token):
     os.makedirs(TEMP_DIR, exist_ok=True)
@@ -581,6 +583,7 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
 
