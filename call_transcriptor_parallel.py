@@ -153,20 +153,54 @@ class Line(BaseModel):
 
 class Convo(BaseModel):
     conversation: Annotated[List[Line], Field(..., description="Full conversation")]
+    hold_time: Annotated[int, Field(..., description="Duration in seconds from hold initiation until Customer speaks, else '0'")]
 
 def process_single_audio_file(file_path, api_key, file_index):
     global processed_count, total_files
     
     try:
         llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash-lite", 
+            model="gemini-2.5-flash", 
             api_key=api_key,
             temperature=0
         )
         structured_llm = llm.with_structured_output(Convo)
         
-        prompt="Extract the text from this audio file and convert it into agent customer conversation , along with start time stamp and end time stamp , the output should be strictly in hinglish not hindi,carefully analyse the call and separate the speakers sometimes agent may spea first sometimes customer may speak first so be carefull,The hospital name maybe SRK or SR Kalla Hospital detect this initially if something matches like this ('eg:- Namaskar SR Kalla Hospital se baat kar rhi hoon'), and intially they are strictly talking about this hospital not any hostel or other thing , carefully analyse this thing too, but dont add from yorself only if the tone matches then only add, some may start with this opening somemay not , but transcript every call given to you "
-        
+prompt = """
+Transcribe this COMPLETE audio call from the VERY FIRST sound to the VERY LAST sound.
+
+LANGUAGE: Hinglish only.(not in pure hindi)
+
+SPEAKERS:
+- First speaker may be Agent or Customer - identify carefully
+- Create SEPARATE lines for each speaker
+- NEVER merge different speakers into one line
+
+OVERLAPPING SPEECH (CRITICAL):
+When both speakers talk at the same time:
+1. Create TWO separate Line entries (one for Agent, one for Customer)
+2. Use the SAME start_time and end_time for both
+3. Set is_overlap=True for both lines
+4. Transcribe what EACH speaker said individually
+
+Example of overlap:
+[00:10] Agent says "aap suniye" while Customer says "haan bol raha"
+Output as:
+- Line 1: speaker="Agent", text="aap suniye", start="00:10", end="00:11", is_overlap=True
+- Line 2: speaker="Customer", text="haan bol raha", start="00:10", end="00:11", is_overlap=True
+
+INITIAL AUDIO:
+- Pay special attention to the FIRST 5 seconds
+- Do NOT skip opening greetings like "Namaskar", "Hello"
+- Agent often starts with hospital name: "SR Kalla Hospital se"
+
+HOLD DETECTION:
+- Detect: "hold pe rahiye", "wait kijiye", "check karta hoon"
+- Count seconds until Customer speaks
+- Ignore immediate fillers
+
+Transcribe EVERYTHING from first sound to last sound.
+"""        
         with open(file_path, "rb") as f:
             audio_data = base64.b64encode(f.read()).decode("utf-8")
             
@@ -230,7 +264,7 @@ def process_audio_files_parallel():
                 data.append(result)
             
             print("Sleeping!!!!!!\n")
-            time.sleep(4) 
+            time.sleep(8) 
             break 
 
     return data
@@ -256,34 +290,37 @@ def convert_conversations_to_text(data):
         item['conversation']=convo
 
 def evaluate_bank_info(conversation_data, engine):
-    
     global _DOCTOR_DF_CACHE, _DB_CONNECTION_FAILED
 
     if _DB_CONNECTION_FAILED:
         return 0, "Bank Info Skipped: Database unreachable"
 
+    full_transcript = ""
+    customer_transcript = ""
+    
     if isinstance(conversation_data, list):
-        transcript = " ".join([
-            str(line.get('text', '') if isinstance(line, dict) else getattr(line, 'text', '')) 
-            for line in conversation_data
-        ]).lower()
+        for line in conversation_data:
+            speaker = str(line.get('speaker', '')).lower()
+            text_content = str(line.get('text', '')).lower()
+            full_transcript += text_content + " "
+            if 'customer' in speaker:
+                customer_transcript += text_content + " "
     else:
-        transcript = str(conversation_data).lower()
+        full_transcript = str(conversation_data).lower()
+        customer_transcript = full_transcript 
 
-    deferral_phrases = ["confirm karke", "check karke", "pata karke", "call back", "wait kijiye"]
-    if any(phrase in transcript for phrase in deferral_phrases):
-        return 0, "Bank Info: Agent deferred to check details"
+    is_cash = any(word in customer_transcript for word in ["cash", "nagad", "nakkad", "paise"])
+    is_non_cash = any(word in customer_transcript for word in ["online", "upi", "paytm", "gpay", "phone pe", "card", "digital", "transfer", "rghs", "scheme"])
 
     if _DOCTOR_DF_CACHE is None:
         try:
-            print("Fetching Doctor Schedule from DB")
+            print("Getting the doctor schedule ready...")
             with engine.connect() as conn:
                 _DOCTOR_DF_CACHE = pd.read_sql(text("SELECT * FROM DoctorSchedule"), conn)
-            
             _DOCTOR_DF_CACHE['clean_name'] = _DOCTOR_DF_CACHE['DoctorName'].astype(str).str.lower().str.replace(r'dr\.?\s*', '', regex=True).str.strip()
-            print("Doctor Schedule Cached.")
+            print("Doctor database is loaded.")
         except Exception as e:
-            print(f"DB Connection Failed.")
+            print("Connection to the database failed.")
             _DB_CONNECTION_FAILED = True
             return 0, "Bank Info: DB Connection Failed"
 
@@ -291,50 +328,62 @@ def evaluate_bank_info(conversation_data, engine):
     if df.empty: return 0, "Bank Info: DB Empty"
 
     best_match_row = None
-    
     for index, row in df.iterrows():
-        full_name = row['clean_name']
-        first_name = full_name.split()[0]
-        
-        if re.search(r'\b' + re.escape(first_name) + r'\b', transcript):
+        if re.search(r'\b' + re.escape(row['clean_name'].split()[0]) + r'\b', full_transcript):
             best_match_row = row
             break 
 
     if best_match_row is None:
-        best_score = 0
-        for index, row in df.iterrows():
-            score = fuzz.partial_ratio(row['clean_name'], transcript)
-            if score > 85 and score > best_score:
-                best_score = score
-                best_match_row = row
-        
-        if best_match_row is None:
-            return 0, "Bank Info: No registered doctor mentioned"
+        print("I couldn't find a doctor name in this call.")
+        return 0, "Bank Info: No registered doctor mentioned"
 
-    db_time_str = str(best_match_row['OPD_Timings']).lower()
-    
-    transcript_has_digits = bool(re.search(r'\d+', transcript))
-
-    if not transcript_has_digits:
-        print(f"Bank Info Match: {best_match_row['DoctorName']} (No time mentioned)")
+    if is_non_cash and not is_cash:
+        print(f"Non-Cash/Scheme call confirmed by customer. Doctor {best_match_row['DoctorName']} verified. Passing.")
         return 33, ""
 
-    else:
-        db_time_match = re.search(r'\d+', db_time_str)
+    db_dept = str(best_match_row.get('Department', '')).lower()
+    db_days = str(best_match_row.get('OPD_Days', '')).lower()
+    db_time = str(best_match_row.get('OPD_Timings', '')).lower()
+    db_fees = str(best_match_row.get('Consultation_Fees', '')).lower()
+
+    errors = []
+
+    if is_cash:
+        print(f"Cash payment mentioned by customer. Checking full details for {best_match_row['DoctorName']}...")
         
+        db_time_match = re.search(r'\d+', db_time)
         if db_time_match:
             start_hour = str(int(db_time_match.group()))
-            
-            if start_hour in transcript:
-                print(f"✅ Bank Info Match: {best_match_row['DoctorName']} (Time Verified: {start_hour})")
-                return 33, ""
-            else:
-                print(f"Bank Info Mismatch: {best_match_row['DoctorName']} starts at {start_hour}, but not found in text.")
-                return 0, f"Bank Info Training: Wrong Time provided for {best_match_row['DoctorName']}"
-        else:
-            return 33, ""
-        
+            if start_hour not in full_transcript:
+                errors.append(f"Wrong Time (Correct: {start_hour})")
+
+        db_fee_match = re.search(r'\d+', db_fees)
+        if db_fee_match:
+            fee_amt = db_fee_match.group()
+            if fee_amt not in full_transcript:
+                errors.append(f"Incorrect Fees (Correct: {fee_amt})")
+
+        if db_days and db_days not in ['nan', '-', '']:
+            db_days_clean = db_days.replace("to", " ").lower()
+            if not any(day[:3] in full_transcript for day in db_days_clean.split()):
+                errors.append("Wrong OPD Days")
+
+        """if db_dept and db_dept not in ['nan', '-', '']:
+            if db_dept not in full_transcript:
+                errors.append("Wrong Department")"""
+
+    if errors:
+        print(f"Verification failed: {', '.join(errors)}")
+        return 0, f"Bank Info Training: {', '.join(set(errors))}"
+    
+    print(f"Everything looks correct for {best_match_row['DoctorName']}.")
+    return 33, ""
+    
 def calculate_call_score(conversation_text):
+    """
+    Evaluates the Agent's performance based on the transcript.
+    Filters to check ONLY lines spoken by the 'Agent'.
+    """
     if not conversation_text:
         conversation_text = ""
         
@@ -348,6 +397,7 @@ def calculate_call_score(conversation_text):
     training_needed = []
 
     greetings = ['good morning', 'good evening', 'namaste', 'namaskar']
+    hospital_name = ['sr kalla','srk']
     
     help_offer = [
         'how may i help', 'can i help', 'help you', 
@@ -360,7 +410,7 @@ def calculate_call_score(conversation_text):
         "sewa ka mauka", "dhanyavad","dhanyawad", "thank you", "thanks","Aapka samay dene ke liye dhanyawad","dhanyawaad","dhanyavaad"
     ]
 
-    has_greet = any(x in agent_transcript for x in greetings)
+    has_greet = any(x in agent_transcript for x in greetings) and any(x in agent_transcript for x in hospital_name)
     has_help  = any(x in agent_transcript for x in help_offer)
 
     if has_greet:
@@ -381,7 +431,7 @@ def calculate_call_score(conversation_text):
     final_training = " | ".join(training_needed) if training_needed else "Training Not Required"
 
     return greeting_score, end_call_score, final_training
-
+    
 def setup_database():
     DATABASE_URL = (
         "mssql+pymssql://sa:y8GPm7unIEoMqpU@"
@@ -515,7 +565,7 @@ def insert_transcription_records(db, data, TranscriptionRecord):
                 GreetingPcnt=item['greeting_score'],
                 End_Call_Pcnt=item['end_call_score'],
 
-                Hold_Time=0,
+                Hold_Time=item['hold_time'],
                 remark=item['remark'],
                 training_module="",
                 missing_details=""
@@ -583,6 +633,7 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
 
