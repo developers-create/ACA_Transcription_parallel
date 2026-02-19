@@ -166,41 +166,41 @@ def process_single_audio_file(file_path, api_key, file_index):
         )
         structured_llm = llm.with_structured_output(Convo)
         
-prompt = """
-Transcribe this COMPLETE audio call from the VERY FIRST sound to the VERY LAST sound.
-
-LANGUAGE: Hinglish only.(not in pure hindi)
-
-SPEAKERS:
-- First speaker may be Agent or Customer - identify carefully
-- Create SEPARATE lines for each speaker
-- NEVER merge different speakers into one line
-
-OVERLAPPING SPEECH (CRITICAL):
-When both speakers talk at the same time:
-1. Create TWO separate Line entries (one for Agent, one for Customer)
-2. Use the SAME start_time and end_time for both
-3. Set is_overlap=True for both lines
-4. Transcribe what EACH speaker said individually
-
-Example of overlap:
-[00:10] Agent says "aap suniye" while Customer says "haan bol raha"
-Output as:
-- Line 1: speaker="Agent", text="aap suniye", start="00:10", end="00:11", is_overlap=True
-- Line 2: speaker="Customer", text="haan bol raha", start="00:10", end="00:11", is_overlap=True
-
-INITIAL AUDIO:
-- Pay special attention to the FIRST 5 seconds
-- Do NOT skip opening greetings like "Namaskar", "Hello"
-- Agent often starts with hospital name: "SR Kalla Hospital se"
-
-HOLD DETECTION:
-- Detect: "hold pe rahiye", "wait kijiye", "check karta hoon"
-- Count seconds until Customer speaks
-- Ignore immediate fillers
-
-Transcribe EVERYTHING from first sound to last sound.
-"""        
+        prompt = """
+        Transcribe this COMPLETE audio call from the VERY FIRST sound to the VERY LAST sound.
+        
+        LANGUAGE: Hinglish only.(not in pure hindi)
+        
+        SPEAKERS:
+        - First speaker may be Agent or Customer - identify carefully
+        - Create SEPARATE lines for each speaker
+        - NEVER merge different speakers into one line
+        
+        OVERLAPPING SPEECH (CRITICAL):
+        When both speakers talk at the same time:
+        1. Create TWO separate Line entries (one for Agent, one for Customer)
+        2. Use the SAME start_time and end_time for both
+        3. Set is_overlap=True for both lines
+        4. Transcribe what EACH speaker said individually
+        
+        Example of overlap:
+        [00:10] Agent says "aap suniye" while Customer says "haan bol raha"
+        Output as:
+        - Line 1: speaker="Agent", text="aap suniye", start="00:10", end="00:11", is_overlap=True
+        - Line 2: speaker="Customer", text="haan bol raha", start="00:10", end="00:11", is_overlap=True
+        
+        INITIAL AUDIO:
+        - Pay special attention to the FIRST 5 seconds
+        - Do NOT skip opening greetings like "Namaskar", "Hello"
+        - Agent often starts with hospital name: "SR Kalla Hospital se"
+        
+        HOLD DETECTION:
+        - Detect: "hold pe rahiye", "wait kijiye", "check karta hoon"
+        - Count seconds until Customer speaks
+        - Ignore immediate fillers
+        
+        Transcribe EVERYTHING from first sound to last sound.
+        """        
         with open(file_path, "rb") as f:
             audio_data = base64.b64encode(f.read()).decode("utf-8")
             
@@ -633,6 +633,7 @@ def main(process_date=None):
 if __name__ == "__main__":
 
     main()
+
 
 
 
