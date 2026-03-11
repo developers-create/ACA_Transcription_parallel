@@ -21,11 +21,18 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 import logging
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load environment variables FIRST
 load_dotenv()
+
+# Get API key
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+if not GOOGLE_API_KEY:
+    logger.warning("GOOGLE_API_KEY not found in environment variables")
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 LOGIN_URL = "https://samwad.iotcom.io/api/applogin"
@@ -41,6 +48,31 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 _DOCTOR_DF_CACHE = None
 _DB_CONNECTION_FAILED = False
+
+# LLM will be initialized lazily when needed
+_llm_instance = None
+_structured_llm_instance = None
+
+def get_llm():
+    """Lazy initialization of LLM"""
+    global _llm_instance
+    if _llm_instance is None:
+        if not GOOGLE_API_KEY:
+            raise ValueError("GOOGLE_API_KEY not set in environment variables")
+        _llm_instance = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            api_key=GOOGLE_API_KEY,
+            temperature=0
+        )
+    return _llm_instance
+
+def get_structured_llm():
+    """Lazy initialization of structured LLM"""
+    global _structured_llm_instance
+    if _structured_llm_instance is None:
+        llm = get_llm()
+        _structured_llm_instance = llm.with_structured_output(Convo)
+    return _structured_llm_instance
 
 def get_auth_token():
     token = None
@@ -72,6 +104,13 @@ def filter_calls_with_bridge_id(call_list):
     return call_with_call_id
 
 def download_audio_files(bridge_ids, token):
+    """
+    Download audio files sequentially
+    
+    Args:
+        bridge_ids: List of bridge ID strings (e.g., ["1234567", "1234568"])
+        token: Auth token
+    """
     os.makedirs(TEMP_DIR, exist_ok=True)
     
     downloaded_files = []
@@ -81,6 +120,7 @@ def download_audio_files(bridge_ids, token):
     logger.info(f"{'='*60}\n")
     
     for idx, bridge_id in enumerate(bridge_ids):
+        # Handle if bridge_id is a dict (from old workflow) or string (from API)
         if isinstance(bridge_id, dict):
             callid = bridge_id.get('bridgeID')
         else:
@@ -128,7 +168,7 @@ def enhance_audio(input_path):
     if os.path.exists(enhanced_path):
         return enhanced_path
 
-    logger.info(f"Enhancing Audio...")
+    logger.info(f"   ✨ Enhancing Audio...")
     
     try:
         command = [
@@ -148,12 +188,6 @@ def enhance_audio(input_path):
         logger.warning(f"{e}. Using original.")
         return input_path
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    api_key=GOOGLE_API_KEY,
-    temperature=0
-)
-
 class Line(BaseModel):
     text: Annotated[str, Field(..., description="What line did the speaker say")]
     speaker: Annotated[Literal["Agent", "Customer"], Field(..., description="Who said this line")]
@@ -164,9 +198,8 @@ class Convo(BaseModel):
     conversation: Annotated[List[Line], Field(..., description="Full conversation")]
     hold_time: Annotated[int, Field(default=0, description="Duration in seconds from hold initiation until Customer speaks, else '0'")]
 
-structured_llm = llm.with_structured_output(Convo)
-
 def process_audio_files():
+    """Process audio files sequentially"""
     data = []
     prompt = """
     Transcribe this COMPLETE audio call from the VERY FIRST sound to the VERY LAST sound.
@@ -190,6 +223,9 @@ def process_audio_files():
     
     Transcribe EVERYTHING from first sound to last sound.
     """
+    
+    # Get structured LLM instance
+    structured_llm = get_structured_llm()
     
     files = [f for f in os.listdir('./input_file') if f.endswith('.wav') or f.endswith('.mp3')]
     
@@ -454,6 +490,7 @@ def insert_call_details(db, call_with_call_id, Call_Details):
     
     logger.info("Adding in Call Details\n")
     for item in call_with_call_id:
+        # Handle both dict and string formats
         if isinstance(item, dict):
             bridge_id = item.get('bridgeID')
         else:
@@ -473,6 +510,7 @@ def insert_call_details(db, call_with_call_id, Call_Details):
 
         seen_ids_in_batch.add(bridge_id)
 
+        # Only add if item is a dict with full details
         if isinstance(item, dict):
             record = Call_Details(
                 bridgeID=bridge_id,
@@ -522,12 +560,15 @@ def insert_transcription_records(db, data, TranscriptionRecord):
 
     db.commit()
 
+# FastAPI app
 app = FastAPI(title="Call Transcriptor API - Sequential", version="1.0")
 
 class ManualTranscriptRequest(BaseModel):
+    """Request model for manual transcription"""
     call_ids: List[str] = Field(..., description="List of bridge IDs to transcribe", min_items=1, max_items=100)
 
 class TranscriptResponse(BaseModel):
+    """Response model"""
     success: bool
     message: str
     total_requested: int
@@ -537,6 +578,11 @@ class TranscriptResponse(BaseModel):
 
 @app.post("/transcript", response_model=TranscriptResponse)
 async def transcript_calls(request: ManualTranscriptRequest):
+    """
+    Transcribe calls by bridge IDs (Sequential processing)
+    
+    - **call_ids**: List of bridge IDs to transcribe (1-100)
+    """
     try:
         if not request.call_ids:
             raise HTTPException(status_code=400, detail="No call IDs provided")
@@ -544,33 +590,41 @@ async def transcript_calls(request: ManualTranscriptRequest):
         call_ids = request.call_ids
         logger.info(f"Received request to process {len(call_ids)} calls")
         
+        # Get auth token
         token = get_auth_token()
         if not token:
             raise HTTPException(status_code=500, detail="Authentication failed")
         
+        # Download audio files
         downloaded_files = download_audio_files(call_ids, token)
         
         if len(downloaded_files) == 0:
             raise HTTPException(status_code=500, detail="No audio files downloaded")
         
+        # Process audio files
         data = process_audio_files()
         
         if len(data) == 0:
             raise HTTPException(status_code=500, detail="No files processed successfully")
         
+        # Save output
         save_output_json(data)
         
+        # Extract and convert
         extract_agent_conversations(data)
         convert_conversations_to_text(data)
         
+        # Calculate scores
         engine, SessionLocal, Base = setup_database()
         calculate_scores(data, engine)
         
+        # Save to database
         Call_Details, TranscriptionRecord = define_models(Base)
         Base.metadata.create_all(bind=engine)
         db = SessionLocal()
         
         try:
+            insert_call_details(db, call_ids, Call_Details)
             insert_transcription_records(db, data, TranscriptionRecord)
         finally:
             db.close()
@@ -608,6 +662,7 @@ async def health_check():
     }
 
 def main(process_date=None):
+    """Main function for standalone execution"""
     if process_date is None:
         yesterday = datetime.now() - timedelta(days=1)
         process_date = yesterday.strftime('%Y-%m-%d')
@@ -668,6 +723,9 @@ def main(process_date=None):
     logger.info(f"{'='*60}\n")
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Get port from environment (Railway provides this)
+    port = int(os.getenv("PORT", 8000))
     
+    # Run as API server
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=port)
